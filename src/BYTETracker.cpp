@@ -1,5 +1,6 @@
 #include "ByteTrack/BYTETracker.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -8,17 +9,15 @@
 #include <utility>
 #include <vector>
 
-byte_track::BYTETracker::BYTETracker(const int& frame_rate,
-                                     const int& track_buffer,
-                                     const float& track_thresh,
-                                     const float& high_thresh,
-                                     const float& match_thresh) :
-    track_thresh_(track_thresh),
-    high_thresh_(high_thresh),
-    match_thresh_(match_thresh),
-    max_time_lost_(static_cast<size_t>(frame_rate / 30.0 * track_buffer)),
+byte_track::BYTETracker::BYTETracker(const ByteTrackerConfig &config) :
+    config_(config),
+    max_time_lost_(static_cast<size_t>(config.track_buffer)),
     frame_id_(0),
-    track_id_count_(0)
+    track_id_count_(0),
+    expected_dt_ms_(1000.0f / config.frame_rate),
+    last_timestamp_ms_(-1),
+    current_dt_(1.0f),
+    has_timestamp_(false)
 {
 }
 
@@ -26,10 +25,56 @@ byte_track::BYTETracker::~BYTETracker()
 {
 }
 
+std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::getAllActiveTracks() const
+{
+    std::vector<STrackPtr> all_tracks;
+    all_tracks.reserve(tracked_stracks_.size() + lost_stracks_.size());
+
+    for (const auto &track : tracked_stracks_)
+    {
+        all_tracks.push_back(track);
+    }
+
+    for (const auto &track : lost_stracks_)
+    {
+        all_tracks.push_back(track);
+    }
+
+    return all_tracks;
+}
+
 std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(const std::vector<Object>& objects)
+{
+    return update(objects, -1);
+}
+
+std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(const std::vector<Object>& objects,
+                                                                                int64_t timestamp_ms)
 {
     ////////////////// Step 1: Get detections //////////////////
     frame_id_++;
+
+    if (timestamp_ms >= 0)
+    {
+        has_timestamp_ = true;
+        if (last_timestamp_ms_ >= 0)
+        {
+            int64_t dt_ms = timestamp_ms - last_timestamp_ms_;
+            if (dt_ms > 0)
+            {
+                current_dt_ = static_cast<float>(dt_ms) / expected_dt_ms_;
+            }
+            else
+            {
+                current_dt_ = 1.0f;
+            }
+        }
+        last_timestamp_ms_ = timestamp_ms;
+    }
+    else
+    {
+        current_dt_ = 1.0f;
+    }
 
     // Create new STracks using the result of object detection
     std::vector<STrackPtr> det_stracks;
@@ -38,7 +83,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
     for (const auto &object : objects)
     {
         const auto strack = std::make_shared<STrack>(object.rect, object.prob);
-        if (object.prob >= track_thresh_)
+        if (object.prob >= config_.track_thresh)
         {
             det_stracks.push_back(strack);
         }
@@ -70,7 +115,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
     // Predict current pose by KF
     for (auto &strack : strack_pool)
     {
-        strack->predict();
+        strack->predict(current_dt_, config_.tracked_predict_dt_cap, config_.lost_predict_dt_cap);
     }
 
     ////////////////// Step 2: First association, with IoU //////////////////
@@ -84,7 +129,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
         std::vector<int> unmatch_detection_idx, unmatch_track_idx;
 
         const auto dists = calcIouDistance(strack_pool, det_stracks);
-        linearAssignment(dists, strack_pool.size(), det_stracks.size(), match_thresh_,
+        linearAssignment(dists, strack_pool.size(), det_stracks.size(), config_.match_thresh,
                          matches_idx, unmatch_track_idx, unmatch_detection_idx);
 
         for (const auto &match_idx : matches_idx)
@@ -125,7 +170,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
         std::vector<int> unmatch_track_idx, unmatch_detection_idx;
 
         const auto dists = calcIouDistance(remain_tracked_stracks, det_low_stracks);
-        linearAssignment(dists, remain_tracked_stracks.size(), det_low_stracks.size(), 0.5,
+        linearAssignment(dists, remain_tracked_stracks.size(), det_low_stracks.size(), config_.low_score_match_thresh,
                          matches_idx, unmatch_track_idx, unmatch_detection_idx);
 
         for (const auto &match_idx : matches_idx)
@@ -165,7 +210,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
 
         // Deal with unconfirmed tracks, usually tracks with only one beginning frame
         const auto dists = calcIouDistance(non_active_stracks, remain_det_stracks);
-        linearAssignment(dists, non_active_stracks.size(), remain_det_stracks.size(), 0.7,
+        linearAssignment(dists, non_active_stracks.size(), remain_det_stracks.size(), config_.unconfirmed_match_thresh,
                          matches_idx, unmatch_unconfirmed_idx, unmatch_detection_idx);
 
         for (const auto &match_idx : matches_idx)
@@ -185,7 +230,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
         for (const auto &unmatch_idx : unmatch_detection_idx)
         {
             const auto track = remain_det_stracks[unmatch_idx];
-            if (track->getScore() < high_thresh_)
+            if (track->getScore() < config_.high_thresh)
             {
                 continue;
             }
@@ -420,7 +465,20 @@ std::vector<std::vector<float> > byte_track::BYTETracker::calcIouDistance(const 
         std::vector<float> iou;
         for (size_t j = 0; j < ious[i].size(); j++)
         {
-            iou.push_back(1 - ious[i][j]);
+            float cost = 1 - ious[i][j];
+
+            float area_a = a_rects[i].width() * a_rects[i].height();
+            float area_b = b_rects[j].width() * b_rects[j].height();
+            if (area_a > 0 && area_b > 0)
+            {
+                float ratio = std::max(area_a, area_b) / std::min(area_a, area_b);
+                if (ratio > config_.max_area_ratio)
+                {
+                    cost = 1.0f;
+                }
+            }
+
+            iou.push_back(cost);
         }
         cost_matrix.push_back(iou);
     }

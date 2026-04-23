@@ -22,7 +22,7 @@ public:
 
     void initiate(StateMean& mean, StateCov& covariance, const DetectBox& measurement);
 
-    void predict(StateMean& mean, StateCov& covariance);
+    void predict(StateMean& mean, StateCov& covariance, float dt = 1.0f);
 
     void update(StateMean& mean, StateCov& covariance, const DetectBox& measurement);
 

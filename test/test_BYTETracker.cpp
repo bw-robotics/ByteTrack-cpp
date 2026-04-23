@@ -120,7 +120,10 @@ TEST(ByteTrack, BYTETracker)
         auto outputs_ref = get_outputs_ref(pt_t_results);
 
         // Test BYTETracker::update()
-        byte_track::BYTETracker tracker(fps, track_buffer);
+        byte_track::ByteTrackerConfig config;
+        config.frame_rate = fps;
+        config.track_buffer = track_buffer;
+        byte_track::BYTETracker tracker(config);
         for (const auto &[frame_id, objects] : inputs_ref)
         {
             const auto outputs = tracker.update(objects);

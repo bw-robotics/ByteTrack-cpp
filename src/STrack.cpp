@@ -1,5 +1,7 @@
 #include "ByteTrack/STrack.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 byte_track::STrack::STrack(const Rect<float>& rect, const float& score) :
@@ -94,13 +96,18 @@ void byte_track::STrack::reActivate(const STrack &new_track, const size_t &frame
     tracklet_len_ = 0;
 }
 
-void byte_track::STrack::predict()
+void byte_track::STrack::predict(float dt, float tracked_dt_cap, float lost_dt_cap)
 {
+    float effective_dt = std::min(dt, tracked_dt_cap);
+
     if (state_ != STrackState::Tracked)
     {
         mean_[7] = 0;
+        effective_dt = std::min(dt, lost_dt_cap);
     }
-    kalman_filter_.predict(mean_, covariance_);
+
+    kalman_filter_.predict(mean_, covariance_, effective_dt);
+    updateRect();
 }
 
 void byte_track::STrack::update(const STrack &new_track, const size_t &frame_id)
@@ -114,6 +121,11 @@ void byte_track::STrack::update(const STrack &new_track, const size_t &frame_id)
     score_ = new_track.getScore();
     frame_id_ = frame_id;
     tracklet_len_++;
+}
+
+std::pair<float, float> byte_track::STrack::getVelocity() const
+{
+    return std::make_pair(mean_[4], mean_[5]);
 }
 
 void byte_track::STrack::markAsLost()
