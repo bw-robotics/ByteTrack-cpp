@@ -79,9 +79,11 @@ void byte_track::STrack::activate(const size_t& frame_id, const size_t& track_id
     tracklet_len_ = 0;
 }
 
-void byte_track::STrack::reActivate(const STrack &new_track, const size_t &frame_id, const int &new_track_id)
+void byte_track::STrack::reActivate(const STrack &new_track, const size_t &frame_id,
+                                    const int &new_track_id, float vel_ema_alpha)
 {
     kalman_filter_.update(mean_, covariance_, new_track.getRect().getXyah());
+    applyVelocityEma(vel_ema_alpha);
 
     updateRect();
 
@@ -110,9 +112,10 @@ void byte_track::STrack::predict(float dt, float tracked_dt_cap, float lost_dt_c
     updateRect();
 }
 
-void byte_track::STrack::update(const STrack &new_track, const size_t &frame_id)
+void byte_track::STrack::update(const STrack &new_track, const size_t &frame_id, float vel_ema_alpha)
 {
     kalman_filter_.update(mean_, covariance_, new_track.getRect().getXyah());
+    applyVelocityEma(vel_ema_alpha);
 
     updateRect();
 
@@ -144,4 +147,25 @@ void byte_track::STrack::updateRect()
     rect_.height() = mean_[3];
     rect_.x() = mean_[0] - rect_.width() / 2;
     rect_.y() = mean_[1] - rect_.height() / 2;
+}
+
+void byte_track::STrack::applyVelocityEma(float alpha)
+{
+    if (alpha >= 1.0f)
+    {
+        return;
+    }
+    const float kf_vx = mean_[4];
+    const float kf_vy = mean_[5];
+    if (!ema_initialized_)
+    {
+        ema_vel_x_ = kf_vx;
+        ema_vel_y_ = kf_vy;
+        ema_initialized_ = true;
+        return;
+    }
+    ema_vel_x_ = alpha * kf_vx + (1.0f - alpha) * ema_vel_x_;
+    ema_vel_y_ = alpha * kf_vy + (1.0f - alpha) * ema_vel_y_;
+    mean_[4] = ema_vel_x_;
+    mean_[5] = ema_vel_y_;
 }

@@ -27,6 +27,12 @@ struct ByteTrackerConfig
     float unconfirmed_match_thresh = 0.7f;
     float tracked_predict_dt_cap = 3.0f;
     float lost_predict_dt_cap = 2.0f;
+    // Lifetime of lost tracks in ms (wall-clock).
+    // <= 0 means: fall back to the frame-count formula based on track_buffer.
+    int track_buffer_ms = -1;
+    // EMA blend factor applied to KF velocity on each update.
+    // 1.0 = off (raw KF velocity); lower = smoother / laggier.
+    float vel_ema_alpha = 1.0f;
 
     std::string asString() const
     {
@@ -39,7 +45,9 @@ struct ByteTrackerConfig
                ", low_score_match_thresh=" + std::to_string(low_score_match_thresh) +
                ", unconfirmed_match_thresh=" + std::to_string(unconfirmed_match_thresh) +
                ", tracked_predict_dt_cap=" + std::to_string(tracked_predict_dt_cap) +
-               ", lost_predict_dt_cap=" + std::to_string(lost_predict_dt_cap);
+               ", lost_predict_dt_cap=" + std::to_string(lost_predict_dt_cap) +
+               ", track_buffer_ms=" + std::to_string(track_buffer_ms) +
+               ", vel_ema_alpha=" + std::to_string(vel_ema_alpha);
     }
 };
 

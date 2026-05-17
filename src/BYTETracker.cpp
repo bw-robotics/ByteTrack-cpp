@@ -138,14 +138,15 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
             const auto det = det_stracks[match_idx[1]];
             if (track->getSTrackState() == STrackState::Tracked)
             {
-                track->update(*det, frame_id_);
+                track->update(*det, frame_id_, config_.vel_ema_alpha);
                 current_tracked_stracks.push_back(track);
             }
             else
             {
-                track->reActivate(*det, frame_id_);
+                track->reActivate(*det, frame_id_, -1, config_.vel_ema_alpha);
                 refind_stracks.push_back(track);
             }
+            track->setLastSeenTimestampMs(timestamp_ms);
         }
 
         for (const auto &unmatch_idx : unmatch_detection_idx)
@@ -179,14 +180,15 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
             const auto det = det_low_stracks[match_idx[1]];
             if (track->getSTrackState() == STrackState::Tracked)
             {
-                track->update(*det, frame_id_);
+                track->update(*det, frame_id_, config_.vel_ema_alpha);
                 current_tracked_stracks.push_back(track);
             }
             else
             {
-                track->reActivate(*det, frame_id_);
+                track->reActivate(*det, frame_id_, -1, config_.vel_ema_alpha);
                 refind_stracks.push_back(track);
             }
+            track->setLastSeenTimestampMs(timestamp_ms);
         }
 
         for (const auto &unmatch_track : unmatch_track_idx)
@@ -215,7 +217,9 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
 
         for (const auto &match_idx : matches_idx)
         {
-            non_active_stracks[match_idx[0]]->update(*remain_det_stracks[match_idx[1]], frame_id_);
+            non_active_stracks[match_idx[0]]->update(*remain_det_stracks[match_idx[1]],
+                                                    frame_id_, config_.vel_ema_alpha);
+            non_active_stracks[match_idx[0]]->setLastSeenTimestampMs(timestamp_ms);
             current_tracked_stracks.push_back(non_active_stracks[match_idx[0]]);
         }
 
@@ -236,14 +240,29 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
             }
             track_id_count_++;
             track->activate(frame_id_, track_id_count_);
+            track->setLastSeenTimestampMs(timestamp_ms);
             current_tracked_stracks.push_back(track);
         }
     }
 
     ////////////////// Step 5: Update state //////////////////
+    const bool use_time_based_expiry =
+        config_.track_buffer_ms > 0 && has_timestamp_ && timestamp_ms >= 0;
+
     for (const auto &lost_strack : lost_stracks_)
     {
-        if (frame_id_ - lost_strack->getFrameId() > max_time_lost_)
+        bool expired;
+        if (use_time_based_expiry && lost_strack->getLastSeenTimestampMs() >= 0)
+        {
+            expired = (timestamp_ms - lost_strack->getLastSeenTimestampMs())
+                      > static_cast<int64_t>(config_.track_buffer_ms);
+        }
+        else
+        {
+            expired = (frame_id_ - lost_strack->getFrameId()) > max_time_lost_; //max_time_lost_ in this case is derived from the frame_id and assuming constant frame rate
+        }
+
+        if (expired)
         {
             lost_strack->markAsRemoved();
             current_removed_stracks.push_back(lost_strack);
