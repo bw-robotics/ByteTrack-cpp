@@ -24,7 +24,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 3.3 REQUIRED)
 
-add_library(${PROJECT_NAME} STATIC
+add_library(${PROJECT_NAME} SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/BYTETracker.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/KalmanFilter.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lapjv.cpp
@@ -44,9 +44,7 @@ install(DIRECTORY include/
 
 install(TARGETS ${PROJECT_NAME}
   EXPORT ${PROJECT_NAME}Targets
-  ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
 )
 
 install(EXPORT ${PROJECT_NAME}Targets
