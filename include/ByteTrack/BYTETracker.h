@@ -33,6 +33,11 @@ struct ByteTrackerConfig
     // EMA blend factor applied to KF velocity on each update.
     // 1.0 = off (raw KF velocity); lower = smoother / laggier.
     float vel_ema_alpha = 1.0f;
+    // For Lost tracks whose predicted box has near-zero IoU with a detection
+    // (e.g. the Kalman prediction has drifted off-screen), allow association by
+    // center distance. Similarity is 1 at zero distance and 0 beyond
+    // scale * average box height. <= 0 disables this behaviour.
+    float lost_center_match_scale = 1.5f;
 
     std::string asString() const
     {
@@ -47,7 +52,8 @@ struct ByteTrackerConfig
                ", tracked_predict_dt_cap=" + std::to_string(tracked_predict_dt_cap) +
                ", lost_predict_dt_cap=" + std::to_string(lost_predict_dt_cap) +
                ", track_buffer_ms=" + std::to_string(track_buffer_ms) +
-               ", vel_ema_alpha=" + std::to_string(vel_ema_alpha);
+               ", vel_ema_alpha=" + std::to_string(vel_ema_alpha) +
+               ", lost_center_match_scale=" + std::to_string(lost_center_match_scale);
     }
 };
 
@@ -88,10 +94,15 @@ private:
                           std::vector<int> &a_unmatched) const;
 
     std::vector<std::vector<float>> calcIouDistance(const std::vector<STrackPtr> &a_tracks,
-                                                    const std::vector<STrackPtr> &b_tracks) const;
+                                                    const std::vector<STrackPtr> &b_tracks,
+                                                    float lost_center_match_scale = 0.0f) const;
 
     std::vector<std::vector<float>> calcIous(const std::vector<Rect<float>> &a_rect,
                                              const std::vector<Rect<float>> &b_rect) const;
+
+    float calcCenterSimilarity(const Rect<float> &a_rect,
+                               const Rect<float> &b_rect,
+                               float scale) const;
 
     double execLapjv(const std::vector<std::vector<float> > &cost,
                      std::vector<int> &rowsol,

@@ -1,6 +1,7 @@
 #include "ByteTrack/BYTETracker.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -128,7 +129,7 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
         std::vector<std::vector<int>> matches_idx;
         std::vector<int> unmatch_detection_idx, unmatch_track_idx;
 
-        const auto dists = calcIouDistance(strack_pool, det_stracks);
+        const auto dists = calcIouDistance(strack_pool, det_stracks, config_.lost_center_match_scale);
         linearAssignment(dists, strack_pool.size(), det_stracks.size(), config_.match_thresh,
                          matches_idx, unmatch_track_idx, unmatch_detection_idx);
 
@@ -462,8 +463,28 @@ std::vector<std::vector<float>> byte_track::BYTETracker::calcIous(const std::vec
     return ious;
 }
 
+float byte_track::BYTETracker::calcCenterSimilarity(const Rect<float> &a_rect,
+                                                    const Rect<float> &b_rect,
+                                                    const float scale) const
+{
+    const float a_h = std::max(a_rect.height(), 1.0f);
+    const float b_h = std::max(b_rect.height(), 1.0f);
+    const float dist_scale = scale * (a_h + b_h) * 0.5f;
+    if (dist_scale <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float dx = (a_rect.x() + a_rect.width() * 0.5f) - (b_rect.x() + b_rect.width() * 0.5f);
+    const float dy = (a_rect.y() + a_rect.height() * 0.5f) - (b_rect.y() + b_rect.height() * 0.5f);
+    const float dist = std::sqrt(dx * dx + dy * dy);
+
+    return std::max(0.0f, 1.0f - dist / dist_scale);
+}
+
 std::vector<std::vector<float> > byte_track::BYTETracker::calcIouDistance(const std::vector<STrackPtr> &a_tracks,
-                                                                          const std::vector<STrackPtr> &b_tracks) const
+                                                                          const std::vector<STrackPtr> &b_tracks,
+                                                                          const float lost_center_match_scale) const
 {
     std::vector<byte_track::Rect<float>> a_rects, b_rects;
     for (size_t i = 0; i < a_tracks.size(); i++)
@@ -478,22 +499,43 @@ std::vector<std::vector<float> > byte_track::BYTETracker::calcIouDistance(const 
 
     const auto ious = calcIous(a_rects, b_rects);
 
+    // Lost tracks whose Kalman prediction has drifted off-screen produce
+    // near-zero IoU even against the correct detection. Allow them to still
+    // associate by center distance so the same id can be re-acquired.
+    constexpr float MIN_IOU_FOR_CENTER_MATCH = 0.05f;
+
     std::vector<std::vector<float>> cost_matrix;
     for (size_t i = 0; i < ious.size(); i++)
     {
+        const bool use_center_match = lost_center_match_scale > 0.0f &&
+                                      a_tracks[i]->getSTrackState() == STrackState::Lost;
+
         std::vector<float> iou;
         for (size_t j = 0; j < ious[i].size(); j++)
         {
-            float cost = 1 - ious[i][j];
-
-            float area_a = a_rects[i].width() * a_rects[i].height();
-            float area_b = b_rects[j].width() * b_rects[j].height();
-            if (area_a > 0 && area_b > 0)
+            float similarity = ious[i][j];
+            if (use_center_match && similarity < MIN_IOU_FOR_CENTER_MATCH)
             {
-                float ratio = std::max(area_a, area_b) / std::min(area_a, area_b);
-                if (ratio > config_.max_area_ratio)
+                similarity = std::max(similarity,
+                                      calcCenterSimilarity(a_rects[i], b_rects[j], lost_center_match_scale));
+            }
+
+            float cost = 1 - similarity;
+
+            // A re-entering or clipped object legitimately changes apparent size, so the
+            // area-ratio penalty would wrongly reject lost-track re-association. Skip it for
+            // lost tracks; center-distance gating already constrains them spatially.
+            if (!use_center_match)
+            {
+                float area_a = a_rects[i].width() * a_rects[i].height();
+                float area_b = b_rects[j].width() * b_rects[j].height();
+                if (area_a > 0 && area_b > 0)
                 {
-                    cost = 1.0f;
+                    float ratio = std::max(area_a, area_b) / std::min(area_a, area_b);
+                    if (ratio > config_.max_area_ratio)
+                    {
+                        cost = 1.0f;
+                    }
                 }
             }
 

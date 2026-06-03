@@ -100,15 +100,27 @@ void byte_track::STrack::reActivate(const STrack &new_track, const size_t &frame
 
 void byte_track::STrack::predict(float dt, float tracked_dt_cap, float lost_dt_cap)
 {
-    float effective_dt = std::min(dt, tracked_dt_cap);
+    const float per_step_cap = (state_ == STrackState::Tracked) ? tracked_dt_cap : lost_dt_cap;
 
     if (state_ != STrackState::Tracked)
     {
         mean_[7] = 0;
-        effective_dt = std::min(dt, lost_dt_cap);
     }
 
-    kalman_filter_.predict(mean_, covariance_, effective_dt);
+    // Advance by the full elapsed time using capped sub-steps. A sparse detector
+    // cadence yields a single large-dt update; clamping it (min(dt, cap)) would
+    // under-predict a lost track after a gap, so instead we accumulate the motion
+    // in cap-sized steps (equivalent to frame-by-frame stepping, bounded by the
+    // track lifetime).
+    float remaining = dt;
+    const float step_cap = per_step_cap > 0.0f ? per_step_cap : dt;
+    do
+    {
+        const float step = (step_cap > 0.0f) ? std::min(remaining, step_cap) : remaining;
+        kalman_filter_.predict(mean_, covariance_, step);
+        remaining -= step;
+    } while (remaining > 1e-3f && step_cap > 0.0f);
+
     updateRect();
 }
 
